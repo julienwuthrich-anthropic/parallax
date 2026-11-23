@@ -71,8 +71,42 @@ export function db() {
     CREATE INDEX IF NOT EXISTS eval_scores_session ON eval_scores(session_id);
     CREATE INDEX IF NOT EXISTS eval_scores_name ON eval_scores(name);
   `);
+  addTraceSummaries(connection);
   connections.set(folder, connection);
   return connection;
+}
+
+/** The totals of one trace over all its spans. `trace_summaries` keeps one such row per trace,
+ *  so a trace list reads one short row per trace and never aggregates every span. */
+export const traceSummarySql = `SELECT trace_id, COALESCE(MAX(session_id), trace_id) AS sid,
+  MIN(start_ms) AS s, MAX(COALESCE(end_ms, start_ms)) AS e, COUNT(*) AS n,
+  COALESCE(SUM(input_tokens), 0) AS it, COALESCE(SUM(output_tokens), 0) AS ot, SUM(cost_usd) AS c,
+  MAX(level = 'ERROR') AS f, MAX(experiment_id) AS x,
+  GROUP_CONCAT(DISTINCT NULLIF(model, '')) AS m
+  FROM trace_spans`;
+
+// Spans are only inserted or replaced. The trigger marks the trace of each written span, also
+// when an older Parallax process writes it; lib/traces.ts recomputes the marked rows. The
+// table, the trigger and the rows for the spans already stored are one transaction, so a stop
+// half-way cannot leave an empty table that looks complete.
+function addTraceSummaries(connection: DatabaseSync) {
+  const exists = connection
+    .prepare("SELECT 1 FROM sqlite_master WHERE name = 'trace_summaries'")
+    .get();
+  if (exists) return;
+  try {
+    connection.exec(`BEGIN IMMEDIATE;
+      CREATE TABLE IF NOT EXISTS trace_summaries (trace_id TEXT PRIMARY KEY, sid TEXT NOT NULL, s INTEGER NOT NULL, e INTEGER NOT NULL, n INTEGER NOT NULL, it INTEGER NOT NULL, ot INTEGER NOT NULL, c REAL, f INTEGER NOT NULL, x TEXT, m TEXT) WITHOUT ROWID;
+      CREATE INDEX IF NOT EXISTS trace_summaries_session ON trace_summaries(sid);
+      CREATE TABLE IF NOT EXISTS trace_summaries_stale (trace_id TEXT PRIMARY KEY) WITHOUT ROWID;
+      CREATE TRIGGER IF NOT EXISTS trace_spans_stale AFTER INSERT ON trace_spans
+        BEGIN INSERT OR IGNORE INTO trace_summaries_stale VALUES (NEW.trace_id); END;
+      INSERT OR REPLACE INTO trace_summaries ${traceSummarySql} GROUP BY trace_id;
+      COMMIT;`);
+  } catch (error) {
+    connection.close(); // drops the open transaction and its write lock
+    throw error;
+  }
 }
 
 export function transaction<T>(fn: () => T): T {
