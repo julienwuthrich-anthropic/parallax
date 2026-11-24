@@ -11,6 +11,7 @@ import {
   createRecord,
   log,
   StoreError,
+  traceSummarySql,
 } from "./store";
 import { demoWorkspaceId, runInWorkspace } from "./workspaces";
 import { mapOtlpRequest, type MappedSpan } from "./otlp";
@@ -111,6 +112,7 @@ export function writeSpans(spans: MappedSpan[], actor: string) {
         s.source,
         now,
       );
+    refreshSummaries();
     const traces = [...new Set(spans.map((s) => s.traceId))];
     for (const id of traces) logTraceActivity(id, actor);
     return { traces, spans: spans.length };
@@ -268,13 +270,19 @@ const toSpan = (r: SpanRow): TraceSpan => ({
   source: r.source,
 });
 
-// Per-trace aggregates. Filters choose traces by id, so the totals always cover every span.
-const traceAggregate = `SELECT trace_id, COALESCE(MAX(session_id), trace_id) AS sid,
-  MIN(start_ms) AS s, MAX(COALESCE(end_ms, start_ms)) AS e, COUNT(*) AS n,
-  COALESCE(SUM(input_tokens), 0) AS it, COALESCE(SUM(output_tokens), 0) AS ot, SUM(cost_usd) AS c,
-  MAX(level = 'ERROR') AS f, MAX(experiment_id) AS x,
-  GROUP_CONCAT(DISTINCT NULLIF(model, '')) AS m
-  FROM trace_spans`;
+/** Bring `trace_summaries` up to date: recompute the traces that the span trigger marked.
+ *  Every read of the table calls this first, so spans written by an older Parallax process
+ *  (which does not call it) still show in the lists. */
+function refreshSummaries() {
+  if (!db().prepare("SELECT 1 FROM trace_summaries_stale LIMIT 1").get())
+    return;
+  transaction(() =>
+    db().exec(`INSERT OR REPLACE INTO trace_summaries ${traceSummarySql}
+      WHERE trace_id IN (SELECT trace_id FROM trace_summaries_stale) GROUP BY trace_id;
+      DELETE FROM trace_summaries_stale;`),
+  );
+}
+
 // "recent" is the latest activity, "started" the first span (Tracely's two time sorts).
 const sortColumns = {
   recent: "e",
@@ -284,6 +292,8 @@ const sortColumns = {
   cost: "COALESCE(c, 0)",
 };
 
+// The rows of trace_summaries that match. Filters choose whole traces, so the totals of a
+// chosen trace always cover every one of its spans.
 function filters(query: z.output<typeof traceQuerySchema>) {
   const where: string[] = [];
   const params: (string | number)[] = [];
@@ -310,15 +320,12 @@ function filters(query: z.output<typeof traceQuerySchema>) {
   }
   if (query.model) match("model = ?", query.model);
   if (query.experimentId) match("experiment_id = ?", query.experimentId);
-  if (query.sessionId)
-    match("COALESCE(session_id, trace_id) = ?", query.sessionId);
-  const having: string[] = [];
-  if (query.status === "failing") having.push("f = 1");
-  if (query.from !== undefined)
-    (having.push("s >= ?"), params.push(query.from));
-  if (query.to !== undefined) (having.push("s <= ?"), params.push(query.to));
+  if (query.sessionId) (where.push("sid = ?"), params.push(query.sessionId));
+  if (query.status === "failing") where.push("f = 1");
+  if (query.from !== undefined) (where.push("s >= ?"), params.push(query.from));
+  if (query.to !== undefined) (where.push("s <= ?"), params.push(query.to));
   return {
-    sql: `${traceAggregate} ${where.length ? `WHERE ${where.join(" AND ")}` : ""} GROUP BY trace_id ${having.length ? `HAVING ${having.join(" AND ")}` : ""}`,
+    sql: `SELECT * FROM trace_summaries ${where.length ? `WHERE ${where.join(" AND ")}` : ""}`,
     params,
   };
 }
@@ -415,6 +422,7 @@ function toSummary(
 
 export function listTraces(input: TraceQuery = {}): Page<TraceSummary> {
   const query = traceQuerySchema.parse(input);
+  refreshSummaries();
   const { sql, params } = filters(query);
   const order = `${sortColumns[query.sort]} ${query.order === "asc" ? "ASC" : "DESC"}, trace_id`;
   const rows = db()
@@ -429,22 +437,34 @@ export function listTraces(input: TraceQuery = {}): Page<TraceSummary> {
 
 export function listSessions(input: TraceQuery = {}): Page<SessionSummary> {
   const query = traceQuerySchema.parse(input);
+  refreshSummaries();
   const { sql, params } = filters(query);
   const grouped = `SELECT sid, COUNT(*) AS turns, MIN(s) AS s, MAX(e) AS e, SUM(n) AS n, SUM(it) AS it,
     SUM(ot) AS ot, SUM(c) AS c, MAX(f) AS f, MAX(x) AS x, GROUP_CONCAT(m) AS m
     FROM (${sql}) GROUP BY sid ${query.multi ? "HAVING COUNT(*) > 1" : ""}`;
   const order = `${sortColumns[query.sort]} ${query.order === "asc" ? "ASC" : "DESC"}, sid`;
+  // The total rides on every row, so one pass over the sessions gives the page and the count.
   const rows = db()
-    .prepare(`SELECT * FROM (${grouped}) ORDER BY ${order} LIMIT ? OFFSET ?`)
+    .prepare(
+      `SELECT *, COUNT(*) OVER () AS total FROM (${grouped}) ORDER BY ${order} LIMIT ? OFFSET ?`,
+    )
     .all(...params, query.limit, query.offset) as (Omit<
     Aggregate,
     "trace_id"
   > & {
     turns: number;
+    total: number;
   })[];
-  const { total } = db()
-    .prepare(`SELECT COUNT(*) AS total FROM (${grouped})`)
-    .get(...params) as { total: number };
+  // A page past the last session has no row to carry the total.
+  const total = rows.length
+    ? rows[0].total
+    : query.offset
+      ? (
+          db()
+            .prepare(`SELECT COUNT(*) AS total FROM (${grouped})`)
+            .get(...params) as { total: number }
+        ).total
+      : 0;
   // The first turn gives the session its title; the last turn gives its latest answer.
   const turns = new Map<string, string[]>();
   if (rows.length) {
@@ -506,7 +526,7 @@ export function getTrace(traceId: string) {
   const spans = spansWhere("trace_id = ?", traceId);
   if (!spans.length) throw new StoreError("Trace not found", 404);
   const aggregate = db()
-    .prepare(`${traceAggregate} WHERE trace_id = ? GROUP BY trace_id`)
+    .prepare(`${traceSummarySql} WHERE trace_id = ? GROUP BY trace_id`)
     .get(traceId) as Aggregate;
   return { ...toSummary(aggregate, endpoints([traceId])), spanList: spans };
 }
@@ -516,7 +536,7 @@ export function getSession(sessionId: string) {
   if (!traces.total) throw new StoreError("Session not found", 404);
   const session = listSessions({ sessionId, limit: 1 }).items[0];
   const spans = spansWhere(
-    "trace_id IN (SELECT trace_id FROM trace_spans WHERE COALESCE(session_id, trace_id) = ?)",
+    "trace_id IN (SELECT trace_id FROM trace_summaries WHERE sid = ?)",
     sessionId,
   );
   return { ...session, traces: traces.items, spanList: spans };
@@ -533,14 +553,17 @@ export function traceStats(experimentId: string) {
 
 /** Distinct models and experiments that have traces, for the filter menus. */
 export function traceFacets() {
+  refreshSummaries();
   return {
-    models: (
-      db()
-        .prepare(
-          "SELECT DISTINCT model FROM trace_spans WHERE model != '' ORDER BY model",
-        )
-        .all() as { model: string }[]
-    ).map((r) => r.model),
+    models: models(
+      (
+        db()
+          .prepare("SELECT DISTINCT m FROM trace_summaries WHERE m IS NOT NULL")
+          .all() as { m: string }[]
+      )
+        .map((r) => r.m)
+        .join(","),
+    ).sort(),
     experiments: (
       db()
         .prepare(

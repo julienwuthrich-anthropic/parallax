@@ -486,6 +486,54 @@ test("OTLP: ingest stores spans; bad payloads are rejected", () => {
   assert.throws(() => mapOtlpRequest({ resourceSpans: 3 }), /must be a list/);
 });
 
+test("trace summaries follow every span write and fill in for an older database", async () => {
+  const { createWorkspace, runInWorkspace } = await import("../lib/workspaces");
+  const { id } = createWorkspace({ name: "Summaries" });
+  const listed = () => ({
+    traces: traces
+      .listTraces({ order: "asc" })
+      .items.map((t) => [t.traceId, t.spans, t.failing]),
+    sessions: traces
+      .listSessions({ order: "asc" })
+      .items.map((s) => [s.sessionId, s.turns, s.spans]),
+    total: traces.listSessions().total,
+    pastTheEnd: traces.listSessions({ offset: 50 }).total,
+    models: traces.traceFacets().models,
+  });
+  const expected = {
+    traces: [
+      ["sum-a", 3, true],
+      ["sum-b", 2, false],
+    ],
+    sessions: [["sum-session", 2, 5]],
+    total: 1,
+    pastTheEnd: 1,
+    models: ["fixture-model"],
+  };
+  runInWorkspace(id, () => {
+    traces.ingestTrace(fixtureTrace("sum-a", { sessionId: "sum-session" }));
+    traces.ingestTrace(fixtureTrace("sum-b", { sessionId: "sum-session" }));
+    // An older Parallax process writes a span and knows nothing about the summaries.
+    store
+      .db()
+      .prepare(
+        `INSERT INTO trace_spans (trace_id, span_id, parent_span_id, session_id, name, type, level, status_message, start_ms, end_ms, model, metadata, source, created_at)
+         VALUES ('sum-a', 'late', 'root', 'sum-session', 'tool', 'TOOL', 'ERROR', 'boom', ?, ?, '', '{}', 'parallax', '')`,
+      )
+      .run(t0 + 1200, t0 + 1300);
+    assert.deepEqual(listed(), expected);
+    assert.equal(traces.getSession("sum-session").spanList.length, 5);
+    // A database from before the summaries: the table is built from the stored spans on open.
+    store
+      .db()
+      .exec(
+        "DROP TRIGGER trace_spans_stale; DROP TABLE trace_summaries_stale; DROP TABLE trace_summaries",
+      );
+  });
+  store.closeDatabases();
+  runInWorkspace(id, () => assert.deepEqual(listed(), expected));
+});
+
 test("demo traces load into the temporary demo workspace only", async () => {
   const { runInWorkspace, workspaceDataDir } =
     await import("../lib/workspaces");
