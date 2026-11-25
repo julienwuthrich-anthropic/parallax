@@ -7,11 +7,13 @@
 //   structured output gets the schema in the prompt instead, so every chat model works.
 // - `runDecision`: one Decisions API call. Decision models (classifiers such as TypeSafe Jev)
 //   have no chat endpoint.
+// - `streamChat`: one streamed chat completion that may ask for tool calls (the workspace chat).
 // - The key is the user's own OpenRouter key: saved from the Evaluators page (one private file
 //   in the data folder), or `OPENROUTER_API_KEY`. With no key nothing here contacts OpenRouter.
 //
 // What leaves this machine: the judged trace content and the rubric, to OpenRouter, only when
-// the user runs a column. Cost is stored only when the provider reports it.
+// the user runs a column; and the question, the earlier turns and the passages the model looks
+// up, when the user asks the workspace chat. Cost is stored only when the provider reports it.
 import {
   chmodSync,
   existsSync,
@@ -385,7 +387,7 @@ function usageOf(raw: unknown, model: string): Usage {
   if (typeof u.cost === "number") usage.cost_usd = u.cost;
   return usage;
 }
-function addUsage(a: Usage, b: Usage): Usage {
+export function addUsage(a: Usage, b: Usage): Usage {
   const sum: Usage = {
     input_tokens: a.input_tokens + b.input_tokens,
     output_tokens: a.output_tokens + b.output_tokens,
@@ -624,6 +626,123 @@ export async function runDecision(
     usage: usageOf(data.usage, id),
     request,
     output: JSON.stringify(answers, null, 2),
+  };
+}
+
+// ── streamed chat with tools (the workspace chat) ───────────────────────────────
+export type ToolCall = {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+};
+export type ToolSpec = {
+  type: "function";
+  function: { name: string; description: string; parameters: Json };
+};
+export type ChatMessage =
+  | { role: "system" | "user"; content: string }
+  | { role: "assistant"; content: string; tool_calls?: ToolCall[] }
+  | { role: "tool"; tool_call_id: string; content: string };
+
+/** One streamed chat completion. `onText` gets the reply as it is written; the tool calls the
+ *  model asks for come back complete, for the caller to run and answer in a next call.
+ *  `signal` stops the request (the reader went away). */
+export async function streamChat(options: {
+  model?: string | null;
+  messages: ChatMessage[];
+  tools?: ToolSpec[];
+  onText: (delta: string) => void;
+  signal?: AbortSignal;
+}): Promise<{ content: string; toolCalls: ToolCall[]; usage: Usage }> {
+  const key = openrouterKey();
+  if (!key) throw new StoreError(NO_KEY, 503);
+  const model = chatModel(options.model);
+  const timeout = AbortSignal.timeout(300_000);
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, timeout])
+    : timeout;
+  let response: Response;
+  for (let attempt = 0; ; attempt++) {
+    response = await fetch(`${settings.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        messages: options.messages,
+        temperature: 0,
+        max_tokens: settings.maxOutputTokens,
+        usage: { include: true },
+        stream: true,
+        ...(options.tools?.length ? { tools: options.tools } : {}),
+      }),
+      signal,
+    });
+    if (!RETRY_STATUSES.includes(response.status) || attempt === ATTEMPTS - 1)
+      break;
+    await response.body?.cancel();
+    await sleep(500 * 2 ** attempt);
+  }
+  if (!response.ok || !response.body)
+    throw new ProviderError(
+      `OpenRouter ${response.status} for ${model}: ${errorMessage(await response.text())}`,
+      response.status,
+    );
+  let content = "";
+  let usage = usageOf(undefined, model);
+  const calls: ToolCall[] = [];
+  const frame = (data: string) => {
+    if (!data || data === "[DONE]") return;
+    const body = JSON.parse(data) as Json;
+    // A failure after the stream started is a frame with `error` (HTTP status is already 200).
+    if (body.error)
+      throw new ProviderError(
+        `OpenRouter failed for ${model}: ${errorMessage(data)}`,
+        502,
+      );
+    if (body.usage) usage = usageOf(body.usage, model);
+    const choice = Array.isArray(body.choices)
+      ? (body.choices[0] as Json | undefined)
+      : undefined;
+    const delta = (choice?.delta ?? {}) as Json;
+    if (typeof delta.content === "string" && delta.content) {
+      content += delta.content;
+      options.onText(delta.content);
+    }
+    // A tool call arrives in pieces: the id and the name once, the arguments as text parts.
+    for (const part of Array.isArray(delta.tool_calls)
+      ? (delta.tool_calls as Json[])
+      : []) {
+      const at = Number(part.index) || 0;
+      const fn = (part.function ?? {}) as Json;
+      const call = (calls[at] ??= {
+        id: "",
+        type: "function",
+        function: { name: "", arguments: "" },
+      });
+      if (typeof part.id === "string" && part.id) call.id = part.id;
+      if (typeof fn.name === "string") call.function.name += fn.name;
+      if (typeof fn.arguments === "string")
+        call.function.arguments += fn.arguments;
+    }
+  };
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for await (const bytes of response.body as unknown as AsyncIterable<Uint8Array>) {
+    buffer += decoder.decode(bytes, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    // Lines that start with ":" are keep-alive comments.
+    for (const text of lines)
+      if (text.startsWith("data:")) frame(text.slice(5).trim());
+  }
+  if (buffer.startsWith("data:")) frame(buffer.slice(5).trim());
+  return {
+    content,
+    toolCalls: calls.filter((call) => call?.function.name),
+    usage,
   };
 }
 

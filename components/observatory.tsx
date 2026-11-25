@@ -24,6 +24,7 @@ import {
   RefreshCw,
   Waypoints,
   LineChart,
+  MessagesSquare,
 } from "lucide-react";
 import type { Workspace, ResearchRecord } from "@/lib/schema";
 import {
@@ -53,6 +54,7 @@ import {
 import { KnowledgeGraph } from "./knowledge-graph";
 import { TracesView } from "./traces/traces-view";
 import { RunsView } from "./runs/runs-view";
+import { ChatPanel } from "./chat-panel";
 
 type View =
   | "overview"
@@ -147,6 +149,29 @@ function WorkspaceScreen({
   const [handoff, setHandoff] = useState(false);
   const [filter, setFilter] = useState("all");
   const [sort, setSort] = useState("recent");
+  // The chat panel: whether it is open and how wide, kept for the next visit.
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatWidth, setChatWidth] = useState(420);
+  useEffect(() => {
+    try {
+      setChatOpen(localStorage.getItem("parallax.chat.open") === "1");
+      const width = Number(localStorage.getItem("parallax.chat.width"));
+      if (width >= 340 && width <= 760) setChatWidth(width);
+    } catch {
+      // no storage: the panel starts closed
+    }
+  }, []);
+  const toggleChat = useCallback((open?: boolean) => {
+    setChatOpen((current) => {
+      const next = open ?? !current;
+      try {
+        localStorage.setItem("parallax.chat.open", next ? "1" : "0");
+      } catch {
+        // no storage
+      }
+      return next;
+    });
+  }, []);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const notify = useCallback((message: string) => {
     setToast(message);
@@ -176,6 +201,10 @@ function WorkspaceScreen({
         e.preventDefault();
         setSearchOpen((v) => !v);
       }
+      if ((e.metaKey || e.ctrlKey) && e.key === "j") {
+        e.preventDefault();
+        toggleChat();
+      }
       if (e.key === "Escape") {
         setSearchOpen(false);
         setNewMenu(false);
@@ -195,7 +224,7 @@ function WorkspaceScreen({
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [editor, selected]);
+  }, [editor, selected, toggleChat]);
   useEffect(() => {
     // The Traces tab keeps its own state after the view id: #traces/trace/<id>, #traces?q=…
     const sync = () => {
@@ -277,7 +306,10 @@ function WorkspaceScreen({
       : workspace?.settings.pilotBudget || 500;
 
   return (
-    <div className={`app-shell ${mobile ? "nav-open" : ""}`}>
+    <div
+      className={`app-shell ${mobile ? "nav-open" : ""} ${chatOpen ? "chat-open" : ""}`}
+      style={{ "--chat-width": `${chatWidth}px` } as React.CSSProperties}
+    >
       {mobile && (
         <button
           className="sidebar-scrim"
@@ -404,6 +436,16 @@ function WorkspaceScreen({
               onClick={() => setSearchOpen(true)}
             >
               <Search size={17} />
+            </button>
+            <button
+              className="icon-button chat-toggle"
+              aria-label="Ask your research"
+              aria-pressed={chatOpen}
+              title="Ask your research (⌘J)"
+              onClick={() => toggleChat()}
+            >
+              <MessagesSquare size={15} />
+              Ask
             </button>
             <span className="avatar small">J</span>
           </div>
@@ -935,6 +977,32 @@ function WorkspaceScreen({
             setWorkspacePicker(false);
             onWorkspaceSelect(id);
           }}
+        />
+      )}
+      {chatOpen && workspace && (
+        <ChatPanel
+          records={records}
+          focus={editor ? null : selectedLive}
+          onWidth={(width) => {
+            setChatWidth(width);
+            try {
+              localStorage.setItem("parallax.chat.width", String(width));
+            } catch {
+              // no storage
+            }
+          }}
+          onClose={() => toggleChat(false)}
+          onOpenRecord={(record) => {
+            // On a narrow screen the chat covers the page: close it to show the record.
+            if (window.innerWidth <= 1050) toggleChat(false);
+            open(record);
+          }}
+          onOpenView={(hash) => {
+            if (window.innerWidth <= 1050) toggleChat(false);
+            setSelected(null);
+            window.location.hash = hash;
+          }}
+          notify={notify}
         />
       )}
       {toast && (

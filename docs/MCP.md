@@ -39,40 +39,41 @@ All research tools accept an optional `workspaceId`. Omitting it uses `PARALLAX_
 
 ## Tools
 
-| Tool                       | Use                                                                                                                |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `list_workspaces`          | List workspace identities and source folders                                                                       |
-| `create_workspace`         | Create an empty private workspace                                                                                  |
-| `list_artifacts`           | List files, linked entry IDs and current link revisions                                                            |
-| `link_artifact`            | Set all desired entry links for an existing file, with a revision check                                            |
-| `link_chart`               | Embed a measured metric chart from an experiment into an entry                                                     |
-| `unlink_chart`             | Remove an embed while retaining source measurements                                                                |
-| `search_research`          | Search full text, tags, and provenance; optionally restrict record kind                                            |
-| `get_record`               | Read current content, all revisions, and attached artifacts                                                        |
-| `create_record`            | Create note, journal, experiment, finding, reference, task, or paper                                               |
-| `update_record`            | Save a complete revised record, with the current revision number                                                   |
-| `update_task`              | Change task status, priority, assignee, or due date without replacing the body                                     |
-| `log_metrics`              | Atomically append measurements to an experiment; duplicate name/step pairs are rejected                            |
-| `attach_file`              | Copy an allowed local file to content-addressed storage and optionally link it to several records with `recordIds` |
-| `link_records`             | Persist a directed graph connection                                                                                |
-| `get_knowledge_graph`      | Read node metadata, typed edges, and record reference links                                                        |
-| `import_repository`        | Snapshot the configured repository's documentation                                                                 |
-| `workspace_summary`        | Read counts, budgets, costs, and activity                                                                          |
-| `session_handoff`          | Read active tasks, recent journals, review items, and paper drafts                                                 |
-| `set_charts`               | Replace an experiment's chart panels (title, metrics, type, goal, smoothing, format)                               |
-| `list_fields`              | Read the workspace's custom field definitions                                                                      |
-| `define_fields`            | Replace the custom field list (call `list_fields` first)                                                           |
-| `get_artifact_kit`         | Read the HTML report kit reference and starter template                                                            |
-| `log_trace`                | Record one LLM trace as a tree of spans; re-sending a span replaces it                                             |
-| `import_traces`            | Import a JSONL file of traces or spans, or an OTLP/JSON export, from the research folder                           |
-| `list_traces`              | List traces with filters (text, status, model, experiment, session, time) and paging                               |
-| `get_trace`                | Read one trace's spans; input/output cut to 4,000 characters unless `full: true`                                   |
-| `list_trace_sessions`      | List conversations: traces grouped by `sessionId`                                                                  |
-| `list_evaluators`          | List the judge columns (evaluators) and whether an OpenRouter key is configured                                    |
-| `list_evaluator_templates` | List the template library of judge columns, each with a ready config                                               |
-| `create_evaluator`         | Add a judge column (an LLM rubric or a decision-model question); runs nothing                                      |
-| `update_evaluator`         | Change or disable a judge column                                                                                   |
-| `list_scores`              | Read the judge scores of a trace or a session                                                                      |
+| Tool                       | Use                                                                                                                   |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `list_workspaces`          | List workspace identities and source folders                                                                          |
+| `create_workspace`         | Create an empty private workspace                                                                                     |
+| `list_artifacts`           | List files, linked entry IDs and current link revisions                                                               |
+| `link_artifact`            | Set all desired entry links for an existing file, with a revision check                                               |
+| `link_chart`               | Embed a measured metric chart from an experiment into an entry                                                        |
+| `unlink_chart`             | Remove an embed while retaining source measurements                                                                   |
+| `search_research`          | Search full text, tags, and provenance; optionally restrict record kind                                               |
+| `search_passages`          | Ranked passages (BM25 full-text index) from records, attached files and runs, for answering a question; no model call |
+| `get_record`               | Read current content, all revisions, and attached artifacts                                                           |
+| `create_record`            | Create note, journal, experiment, finding, reference, task, or paper                                                  |
+| `update_record`            | Save a complete revised record, with the current revision number                                                      |
+| `update_task`              | Change task status, priority, assignee, or due date without replacing the body                                        |
+| `log_metrics`              | Atomically append measurements to an experiment; duplicate name/step pairs are rejected                               |
+| `attach_file`              | Copy an allowed local file to content-addressed storage and optionally link it to several records with `recordIds`    |
+| `link_records`             | Persist a directed graph connection                                                                                   |
+| `get_knowledge_graph`      | Read node metadata, typed edges, and record reference links                                                           |
+| `import_repository`        | Snapshot the configured repository's documentation                                                                    |
+| `workspace_summary`        | Read counts, budgets, costs, and activity                                                                             |
+| `session_handoff`          | Read active tasks, recent journals, review items, and paper drafts                                                    |
+| `set_charts`               | Replace an experiment's chart panels (title, metrics, type, goal, smoothing, format)                                  |
+| `list_fields`              | Read the workspace's custom field definitions                                                                         |
+| `define_fields`            | Replace the custom field list (call `list_fields` first)                                                              |
+| `get_artifact_kit`         | Read the HTML report kit reference and starter template                                                               |
+| `log_trace`                | Record one LLM trace as a tree of spans; re-sending a span replaces it                                                |
+| `import_traces`            | Import a JSONL file of traces or spans, or an OTLP/JSON export, from the research folder                              |
+| `list_traces`              | List traces with filters (text, status, model, experiment, session, time) and paging                                  |
+| `get_trace`                | Read one trace's spans; input/output cut to 4,000 characters unless `full: true`                                      |
+| `list_trace_sessions`      | List conversations: traces grouped by `sessionId`                                                                     |
+| `list_evaluators`          | List the judge columns (evaluators) and whether an OpenRouter key is configured                                       |
+| `list_evaluator_templates` | List the template library of judge columns, each with a ready config                                                  |
+| `create_evaluator`         | Add a judge column (an LLM rubric or a decision-model question); runs nothing                                         |
+| `update_evaluator`         | Change or disable a judge column                                                                                      |
+| `list_scores`              | Read the judge scores of a trace or a session                                                                         |
 
 Resource: `parallax://research-contract` summarizes reproducibility, privacy, and evidence expectations.
 

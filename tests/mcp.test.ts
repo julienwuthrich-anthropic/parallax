@@ -36,7 +36,7 @@ test("real MCP stdio client: tools, records, metrics, tasks, graph, attachments 
   try {
     await client.connect(transport);
     const tools = await client.listTools();
-    assert.equal(tools.tools.length, 38);
+    assert.equal(tools.tools.length, 39);
     const experiment = await call("create_record", {
       kind: "experiment",
       title: "Fixture only: MCP baseline",
@@ -268,6 +268,13 @@ test("real MCP stdio client: tools, records, metrics, tasks, graph, attachments 
     assert.equal(record.record.revision, 2); // ...but bumps the revision
     const found = await call("search_research", { query: "MCP baseline" });
     assert.equal(found.length, 1);
+    const passages = await call("search_passages", { query: "baseline" });
+    assert.equal(passages[0].id, experiment.id);
+    assert.match(passages[0].snippet, /«baseline»/);
+    assert.equal(
+      (await call("search_passages", { query: "isolated" })).length,
+      0,
+    );
     const handoff = await call("session_handoff");
     assert.ok(
       handoff.activeTasks.some((r: { id: string }) => r.id === task.id),

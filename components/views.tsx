@@ -550,6 +550,7 @@ export function SettingsView({
           <div className="mcp-tools-grid">
             {[
               ["search_research", "Find notes, findings, and context"],
+              ["search_passages", "Get the passages that answer a question"],
               ["create_record", "Save research, tasks, and manuscripts"],
               ["update_task", "Keep the Kanban board current"],
               ["link_records", "Build the persistent knowledge graph"],
