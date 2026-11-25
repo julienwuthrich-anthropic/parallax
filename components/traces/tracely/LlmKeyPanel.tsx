@@ -85,7 +85,8 @@ export function LlmKeyPanel({ onChange }: { onChange?: (configured: boolean) => 
           Required to run judges. Every evaluator call — LLM judges, decision models, and
           &ldquo;Use AI&rdquo; in the column editor — goes to OpenRouter with your own key and
           bills to your account. A run sends the judged trace content and the rubric to
-          OpenRouter. Without a key, Parallax contacts nobody.
+          OpenRouter. The workspace chat (Ask) uses the same key: an answer sends your question
+          and the passages the model reads. Without a key, Parallax contacts nobody.
         </p>
 
         {status === "unset" && (
